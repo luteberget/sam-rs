@@ -1,9 +1,7 @@
-use std::ops::ControlFlow;
-
 pub struct Phonemes {
-    stress: [u8; 256],
-    phoneme_length: [u8; 256],
-    phoneme_index: [u8; 256],
+    pub stress: [u8; 256],
+    pub phoneme_length: [u8; 256],
+    pub phoneme_index: [u8; 256],
 }
 
 impl Default for Phonemes {
@@ -55,7 +53,7 @@ pub fn convert_phonemes(phonetic: &[u8]) -> Phonemes {
     let mut mem = Phonemes::default();
     parse_1(&mut mem, phonetic);
     print_phonemes(&mem);
-    parse_2(&mut mem, phonetic);
+    parse_2(&mut mem);
     copy_stress(&mut mem);
     set_phoneme_length(&mut mem);
     code41240(&mut mem);
@@ -416,7 +414,7 @@ fn copy_stress(mem: &mut Phonemes) {
     }
 }
 
-fn parse_2(mem: &mut Phonemes, phonetic: &[u8]) {
+fn parse_2(mem: &mut Phonemes) {
     // Rewrites the phonemes using the following rules:
     //
     //       <DIPHTONG ENDING WITH WX> -> <DIPHTONG ENDING WITH WX> WX
