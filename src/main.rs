@@ -1,8 +1,11 @@
-use crate::{phonemes::{convert_phonemes, print_phonemes}, render::FormantTables};
+use crate::{
+    phonemes::{convert_phonemes, print_phonemes},
+    frames::FormantTables,
+};
 
 mod phonemes;
-mod render;
-mod rendertables;
+mod frames;
+mod tables;
 
 pub struct Params {
     pub speed: u8,
@@ -30,12 +33,14 @@ fn main() {
 
     let params = Params::default();
 
-    
     let phonemes = convert_phonemes(input.as_bytes());
     print_phonemes(&phonemes);
-    
+
     let formant_tables = FormantTables::from_params(&params);
-    let buffer: Vec<u8> = render::render(&params, &phonemes, &formant_tables);
+    let frames = frames::mk_frames(&params, &phonemes, &formant_tables);
+    frames::print_frames(&frames);
+
+    let buffer = frames::mk_wav(&frames);
 
     println!("{:?}", buffer);
 }

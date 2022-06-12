@@ -1,6 +1,28 @@
-use crate::rendertables::{RECTANGLE, SAMPLE_TABLE, SINE};
+use crate::tables::{RECTANGLE, SAMPLE_TABLE, SINE};
 use crate::{phonemes::Phonemes, Params};
 use std::cmp::Ordering;
+
+pub fn print_frames(frames: &FramesTables) {
+    println!("===========================================");
+    println!("Final data for speech output:");
+    println!();
+    println!(" flags ampl1 freq1 ampl2 freq2 ampl3 freq3 pitch");
+    println!("------------------------------------------------");
+    for i in 0..255 {
+        println!(
+            "{:5} {:5} {:5} {:5} {:5} {:5} {:5} {:5}",
+            frames.sampled_consonant_flag[i],
+            frames.amplitude1[i],
+            frames.frequency1[i],
+            frames.amplitude2[i],
+            frames.frequency2[i],
+            frames.amplitude3[i],
+            frames.frequency3[i],
+            frames.pitches[i]
+        );
+    }
+    println!("===========================================");
+}
 
 pub struct FormantTables {
     mouth: [u8; 80],
@@ -44,28 +66,66 @@ impl FormantTables {
 
         for idx in 5..30 {
             if mouth_formants5_29[idx] != 0 {
-                tables.mouth[idx] =
-                    ((params.mouth as u32 * mouth_formants5_29[idx] as u32) / 2) as u8;
+                tables.mouth[idx] = trans(params.mouth, mouth_formants5_29[idx]);
             }
+            println!(
+                "Set mouth idx={idx} table[idx]={} mouth={} other={} value={}",
+                mouth_formants5_29[idx],
+                params.mouth,
+                mouth_formants5_29[idx] as u32,
+                tables.mouth[idx]
+            );
 
             if throat_formants5_29[idx] != 0 {
-                tables.throat[idx] =
-                    ((params.throat as u32 * throat_formants5_29[idx] as u32) / 2) as u8;
+                tables.throat[idx] = trans(params.throat, throat_formants5_29[idx]);
             }
         }
 
         for (idx, table_idx) in (48..54).enumerate() {
-            tables.mouth[table_idx] =
-                ((params.mouth as u32 * mouth_formants48_53[idx] as u32) / 2) as u8;
-            tables.throat[table_idx] =
-                ((params.throat as u32 * throat_formants48_53[idx] as u32) / 2) as u8;
+            tables.mouth[table_idx] = trans(params.mouth, mouth_formants48_53[idx]);
+            tables.throat[table_idx] = trans(params.throat, throat_formants48_53[idx]);
         }
 
         tables
     }
 }
 
-struct FramesTables {
+fn trans(mut a: u8, b: u8) -> u8 {
+    let mut carry = 0;
+    let mut temp = 0;
+    let mut c = 0u8;
+    let mut d = 0;
+    let mut A = 0;
+
+    for _X in 0..8 {
+        carry = a & 1;
+        a >>= 1;
+        if carry != 0 {
+            carry = 0;
+            A = d;
+            temp = A as i32 + b as i32;
+            A += b;
+            if temp > 255 {
+                carry = 1;
+            }
+            d = A;
+        }
+
+        d = (d >> 1) | if carry != 0 { 128 } else { 0 };
+        carry = d & 1;
+    }
+
+    temp = (c & 128) as i32;
+    c = (c << 1) | if carry != 0 { 1 } else { 0 };
+    carry = temp as u8;
+    // temp = (d & 128) as i32;
+
+    d = (d << 1) | if carry != 0 { 1 } else { 0 };
+
+    d
+}
+
+pub struct FramesTables {
     pitches: [u8; 256],
     frequency1: [u8; 256],
     frequency2: [u8; 256],
@@ -74,6 +134,7 @@ struct FramesTables {
     amplitude2: [u8; 256],
     amplitude3: [u8; 256],
     sampled_consonant_flag: [u8; 256],
+    sum_length: u8,
 }
 
 // RENDER THE PHONEMES IN THE LIST
@@ -91,7 +152,7 @@ struct FramesTables {
 // 4. Render the each frame.
 
 //void Code47574()
-pub fn render(params: &Params, phonemes: &Phonemes, formants: &FormantTables) -> Vec<u8> {
+pub fn mk_frames(params: &Params, phonemes: &Phonemes, formants: &FormantTables) -> FramesTables {
     // CREATE FRAMES
     //
     // The length parameter in the list corresponds to the number of frames
@@ -101,6 +162,7 @@ pub fn render(params: &Params, phonemes: &Phonemes, formants: &FormantTables) ->
     // The parameters are copied from the phoneme to the frame verbatim.
 
     let mut frames = FramesTables {
+        sum_length: 0,
         pitches: [0; 256],
         frequency1: [0; 256],
         frequency2: [0; 256],
@@ -169,6 +231,10 @@ pub fn render(params: &Params, phonemes: &Phonemes, formants: &FormantTables) ->
             let table: [u8; 11] = [0, 0, 0xE0, 0xE6, 0xEC, 0xF3, 0xF9, 0, 6, 0xC, 6];
             phase_1 = table[phonemes.stress[idx] as usize + 1];
             for _ in 0..phonemes.phoneme_length[idx] {
+                println!(
+                    "freq1[{}]=freq1data[{}]={}",
+                    frame_idx, phoneme, formants.mouth[phoneme as usize]
+                );
                 frames.frequency1[frame_idx] = formants.mouth[phoneme as usize];
                 frames.frequency2[frame_idx] = formants.throat[phoneme as usize];
                 frames.frequency3[frame_idx] = FREQ3[phoneme as usize];
@@ -184,6 +250,9 @@ pub fn render(params: &Params, phonemes: &Phonemes, formants: &FormantTables) ->
             println!("{} frames", frame_idx);
         }
     }
+    println!("BEFORE TRANSITIONS");
+    print_frames(&frames);
+
     // CREATE TRANSITIONS
     //
     // Linear transitions are now created to smoothly connect the
@@ -313,126 +382,123 @@ pub fn render(params: &Params, phonemes: &Phonemes, formants: &FormantTables) ->
     //   241     2    10     2    65     1    96    59 * <-- OutBlendFrames = 1
     //   241     0     6     0    73     0    99    61
 
-    let sum_length = {
-        let mut idx = 0;
-        let mut sum_length = 0;
+    let mut idx = 0;
 
-        loop {
-            let phoneme = phonemes.phoneme_index[idx];
-            let next_phoneme = phonemes.phoneme_index[idx + 1];
-            sum_length += phonemes.phoneme_length[idx];
+    loop {
+        let phoneme = phonemes.phoneme_index[idx];
+        let next_phoneme = phonemes.phoneme_index[idx + 1];
+        println!("phoneme and next {} {}\n", phoneme, next_phoneme);
+        frames.sum_length += phonemes.phoneme_length[idx];
 
-            if phoneme == 255 {
-                break;
-            }
+        if phoneme == 255 {
+            break;
+        }
 
-            // Used to decide which phoneme's blend lengths. The candidate with the lower score is selected.
-            // tab45856
-            const BLEND_RANK: [u8; 80] = [
-                0, 0x1F, 0x1F, 0x1F, 0x1F, 2, 2, 2, 2, 2, 2, 2, 2, 2, 5, 5, 2, 0xA, 2, 8, 5, 5,
-                0xB, 0xA, 9, 8, 8, 0xA0, 8, 8, 0x17, 0x1F, 0x12, 0x12, 0x12, 0x12, 0x1E, 0x1E,
-                0x14, 0x14, 0x14, 0x14, 0x17, 0x17, 0x1A, 0x1A, 0x1D, 0x1D, 2, 2, 2, 2, 2, 2, 0x1A,
-                0x1D, 0x1B, 0x1A, 0x1D, 0x1B, 0x1A, 0x1D, 0x1B, 0x1A, 0x1D, 0x1B, 0x17, 0x1D, 0x17,
-                0x17, 0x1D, 0x17, 0x17, 0x1D, 0x17, 0x17, 0x1D, 0x17, 0x17, 0x17,
-            ];
-            const OUT_BLEND_LENGTH: [u8; 80] = [
-                0, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 2, 4, 4, 2, 2, 2, 2, 2, 1,
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 0, 1, 0, 1, 0, 5, 5, 5, 5, 5, 4, 4, 2, 0,
-                1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 2, 2, 0, 1, 3, 0, 2, 3, 0, 2, 0xA0, 0xA0,
-            ];
+        // Used to decide which phoneme's blend lengths. The candidate with the lower score is selected.
+        // tab45856
+        const BLEND_RANK: [u8; 80] = [
+            0, 0x1F, 0x1F, 0x1F, 0x1F, 2, 2, 2, 2, 2, 2, 2, 2, 2, 5, 5, 2, 0xA, 2, 8, 5, 5, 0xB,
+            0xA, 9, 8, 8, 0xA0, 8, 8, 0x17, 0x1F, 0x12, 0x12, 0x12, 0x12, 0x1E, 0x1E, 0x14, 0x14,
+            0x14, 0x14, 0x17, 0x17, 0x1A, 0x1A, 0x1D, 0x1D, 2, 2, 2, 2, 2, 2, 0x1A, 0x1D, 0x1B,
+            0x1A, 0x1D, 0x1B, 0x1A, 0x1D, 0x1B, 0x1A, 0x1D, 0x1B, 0x17, 0x1D, 0x17, 0x17, 0x1D,
+            0x17, 0x17, 0x1D, 0x17, 0x17, 0x1D, 0x17, 0x17, 0x17,
+        ];
+        const OUT_BLEND_LENGTH: [u8; 80] = [
+            0, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 2, 4, 4, 2, 2, 2, 2, 2, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 0, 1, 0, 1, 0, 5, 5, 5, 5, 5, 4, 4, 2, 0, 1, 2,
+            0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 2, 2, 0, 1, 3, 0, 2, 3, 0, 2, 0xA0, 0xA0,
+        ];
 
-            const IN_BLEND_LENGTH: [u8; 80] = [
-                0, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 4, 4, 3, 3, 3, 3, 3, 1,
-                2, 3, 2, 1, 3, 3, 3, 3, 1, 1, 3, 3, 3, 2, 2, 3, 2, 3, 0, 0, 5, 5, 5, 5, 4, 4, 2, 0,
-                2, 2, 0, 3, 2, 0, 4, 2, 0, 3, 2, 0, 2, 2, 0, 2, 3, 0, 3, 3, 0, 3, 0xB0, 0xA0,
-            ];
+        const IN_BLEND_LENGTH: [u8; 80] = [
+            0, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 4, 4, 3, 3, 3, 3, 3, 1, 2,
+            3, 2, 1, 3, 3, 3, 3, 1, 1, 3, 3, 3, 2, 2, 3, 2, 3, 0, 0, 5, 5, 5, 5, 4, 4, 2, 0, 2, 2,
+            0, 3, 2, 0, 4, 2, 0, 3, 2, 0, 2, 2, 0, 2, 3, 0, 3, 3, 0, 3, 0xB0, 0xA0,
+        ];
 
-            let (r1, r2) = (
-                BLEND_RANK[phoneme as usize],
-                BLEND_RANK[next_phoneme as usize],
-            );
-            let (phase_1, phase_2) = match r1.cmp(&r2) {
-                Ordering::Less => (
-                    IN_BLEND_LENGTH[phoneme as usize],
-                    OUT_BLEND_LENGTH[phoneme as usize],
-                ),
-                Ordering::Equal => (
-                    OUT_BLEND_LENGTH[phoneme as usize],
-                    OUT_BLEND_LENGTH[next_phoneme as usize],
-                ),
-                Ordering::Greater => (
-                    OUT_BLEND_LENGTH[next_phoneme as usize],
-                    IN_BLEND_LENGTH[next_phoneme as usize],
-                ),
-            };
+        let (r1, r2) = (
+            BLEND_RANK[phoneme as usize],
+            BLEND_RANK[next_phoneme as usize],
+        );
+        let (phase_1, phase_2) = match r1.cmp(&r2) {
+            Ordering::Less => (
+                IN_BLEND_LENGTH[phoneme as usize],
+                OUT_BLEND_LENGTH[phoneme as usize],
+            ),
+            Ordering::Equal => (
+                OUT_BLEND_LENGTH[phoneme as usize],
+                OUT_BLEND_LENGTH[next_phoneme as usize],
+            ),
+            Ordering::Greater => (
+                OUT_BLEND_LENGTH[next_phoneme as usize],
+                IN_BLEND_LENGTH[next_phoneme as usize],
+            ),
+        };
 
-            let start_frame = sum_length.wrapping_sub(phase_1);
-            let end_frame = sum_length.wrapping_add(phase_2);
+        let start_frame = frames.sum_length.wrapping_sub(phase_1);
+        let end_frame = frames.sum_length.wrapping_add(phase_2);
 
-            // ???
-            let do_interpolation = (phase_1.wrapping_add(phase_2).wrapping_sub(2)) & 128 == 0;
+        // ???
+        let do_interpolation = (phase_1.wrapping_add(phase_2).wrapping_sub(2)) & 128 == 0;
 
-            if do_interpolation {
-                for (is_pitch, current_table) in [
-                    (true, &mut frames.pitches),
-                    (false, &mut frames.frequency1),
-                    (false, &mut frames.frequency2),
-                    (false, &mut frames.frequency3),
-                    (false, &mut frames.amplitude1),
-                    (false, &mut frames.amplitude2),
-                    (false, &mut frames.amplitude3),
-                ] {
-                    let (value, length) = if is_pitch {
-                        let curr_halfwidth = phonemes.phoneme_length[idx] >> 1;
-                        let next_halfwidth = phonemes.phoneme_length[idx + 1] >> 1;
-                        let center_next = next_halfwidth + sum_length;
-                        let center_curr = sum_length - curr_halfwidth;
+        if do_interpolation {
+            for (is_pitch, current_table) in [
+                (true, &mut frames.pitches),
+                (false, &mut frames.frequency1),
+                (false, &mut frames.frequency2),
+                (false, &mut frames.frequency3),
+                (false, &mut frames.amplitude1),
+                (false, &mut frames.amplitude2),
+                (false, &mut frames.amplitude3),
+            ] {
+                let (value, length) = if is_pitch {
+                    let curr_halfwidth = phonemes.phoneme_length[idx] >> 1;
+                    let next_halfwidth = phonemes.phoneme_length[idx + 1] >> 1;
+                    let center_next = next_halfwidth + frames.sum_length;
+                    let center_curr = frames.sum_length - curr_halfwidth;
 
-                        let value = current_table[center_next as usize]
-                            - current_table[center_curr as usize];
-                        let length = curr_halfwidth + next_halfwidth;
-                        (value, length)
-                    } else {
-                        let value =
-                            current_table[end_frame as usize] - current_table[start_frame as usize];
-                        let length = phase_1 + phase_2;
-                        (value, length)
-                    };
+                    let value =
+                        current_table[center_next as usize] - current_table[center_curr as usize];
+                    let length = curr_halfwidth + next_halfwidth;
+                    (value, length)
+                } else {
+                    let value =
+                        current_table[end_frame as usize] - current_table[start_frame as usize];
+                    let length = phase_1 + phase_2;
+                    (value, length)
+                };
 
-                    let value_sign = value & 128;
+                let value_sign = value & 128;
 
-                    // Change per frame
-                    let (change_remainder, change_per_frame) = {
-                        let m53 = value as i8;
-                        let m53abs = m53.abs() as u8;
-                        let change_remainder = m53abs % length;
-                        let change_per_frame = (m53 / length as i8) as u8;
-                        (change_remainder, change_per_frame)
-                    };
+                // Change per frame
+                let (change_remainder, change_per_frame) = {
+                    let m53 = value as i8;
+                    let m53abs = m53.abs() as u8;
+                    let change_remainder = m53abs % length;
+                    let change_per_frame = (m53 / length as i8) as u8;
+                    (change_remainder, change_per_frame)
+                };
 
-                    let mut carry = 0;
-                    for idx in start_frame..(start_frame + length) {
-                        let mut set_value = current_table[idx as usize] + change_per_frame;
-                        carry += change_remainder;
-                        if carry >= length {
-                            carry -= length;
-                            if value_sign % 128 == 0 {
-                                if set_value != 0 {
-                                    set_value += 1;
-                                }
-                            } else {
-                                set_value -= 1;
+                let mut carry = 0;
+                for idx in start_frame..(start_frame + length) {
+                    let mut set_value = current_table[idx as usize] + change_per_frame;
+                    carry += change_remainder;
+                    if carry >= length {
+                        carry -= length;
+                        if value_sign % 128 == 0 {
+                            if set_value != 0 {
+                                set_value += 1;
                             }
+                        } else {
+                            set_value -= 1;
                         }
-
-                        current_table[idx as usize] = set_value;
                     }
+
+                    current_table[idx as usize] = set_value;
                 }
             }
-            idx += 1;
         }
-        sum_length
-    };
+        idx += 1;
+    }
 
     // ASSIGN PITCH CONTOUR
     //
@@ -459,8 +525,10 @@ pub fn render(params: &Params, phonemes: &Phonemes, formants: &FormantTables) ->
         frames.amplitude3[i] = AMPLITUDE_RESCALE[frames.amplitude3[i] as usize];
     }
 
-    // TODO implement PrintOutput to debug frame specs?
+    frames
+}
 
+pub fn mk_wav(frames: &FramesTables) -> Vec<u8> {
     // PROCESS THE FRAMES
     //
     // In traditional vocal synthesis, the glottal pulse drives filters, which
@@ -476,14 +544,14 @@ pub fn render(params: &Params, phonemes: &Phonemes, formants: &FormantTables) ->
         let mut phase_1 = 0;
         let mut phase_2 = 0;
         let mut phase_3 = 0;
-        let mut sum_length = sum_length;
+        let mut sum_length = frames.sum_length;
         let mut speed_counter = 72;
         let mut glottal_pulse_length = frames.pitches[frame_idx];
         let mut voiced_length = glottal_pulse_length - (glottal_pulse_length >> 2);
         loop {
             let consonant_flag = frames.sampled_consonant_flag[frame_idx];
             if consonant_flag & 248 != 0 {
-                render_sample(frame_idx, &mut frames, &mut output_buffer);
+                render_sample(frame_idx, frames, &mut output_buffer);
                 frame_idx += 2;
                 sum_length -= 2;
             } else {
@@ -537,7 +605,7 @@ pub fn render(params: &Params, phonemes: &Phonemes, formants: &FormantTables) ->
                 continue;
             }
 
-            render_sample(frame_idx, &mut frames, &mut output_buffer);
+            render_sample(frame_idx, frames, &mut output_buffer);
             glottal_pulse_length = frames.pitches[frame_idx];
             voiced_length = glottal_pulse_length - (glottal_pulse_length >> 2);
             phase_1 = 0;
@@ -596,7 +664,7 @@ fn add_inflection(frame_idx: usize, frames: &mut FramesTables, inflection_direct
     }
 }
 
-fn render_sample(frame_idx: usize, frames: &mut FramesTables, output_buffer: &mut C64SoundBuffer) {
+fn render_sample(frame_idx: usize, frames: &FramesTables, output_buffer: &mut C64SoundBuffer) {
     let consonant_flag = frames.sampled_consonant_flag[frame_idx];
     let mem56 = (consonant_flag & 7) - 1;
 
